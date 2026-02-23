@@ -232,7 +232,7 @@ public class DynamoDbStreamsProxy implements StreamProxy {
 
     private boolean isExpiredTokenException(AwsServiceException e) {
         String errorCode = e.awsErrorDetails() != null ? e.awsErrorDetails().errorCode() : "";
-        
+
         return "ExpiredToken".equalsIgnoreCase(errorCode) ||
                "UnrecognizedClientException".equalsIgnoreCase(errorCode) ||
                (e.getMessage() != null && e.getMessage().contains("security token included in the request is expired"));
