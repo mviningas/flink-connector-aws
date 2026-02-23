@@ -24,13 +24,11 @@ import org.apache.flink.connector.dynamodb.source.util.ListShardsResult;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.services.dynamodb.model.DescribeStreamRequest;
 import software.amazon.awssdk.services.dynamodb.model.DescribeStreamResponse;
 import software.amazon.awssdk.services.dynamodb.model.DynamoDbException;
-import software.amazon.awssdk.core.exception.SdkServiceException;
-import software.amazon.awssdk.awscore.exception.AwsServiceException;
-import software.amazon.awssdk.awscore.exception.AwsErrorDetails;
 import software.amazon.awssdk.services.dynamodb.model.ExpiredIteratorException;
 import software.amazon.awssdk.services.dynamodb.model.GetRecordsRequest;
 import software.amazon.awssdk.services.dynamodb.model.GetRecordsResponse;
@@ -63,7 +61,7 @@ public class DynamoDbStreamsProxy implements StreamProxy {
                     .build();
 
     private static final Logger LOG = LoggerFactory.getLogger(DynamoDbStreamsProxy.class);
-    
+
     // Circuit breaker parameters to prevent infinite client refreshes
     private static final int MAX_REFRESH_ATTEMPTS = 3;
     private static final long REFRESH_WINDOW_MS = 60000; // 1 minute
@@ -204,17 +202,20 @@ public class DynamoDbStreamsProxy implements StreamProxy {
         refreshAttempts++;
 
         if (refreshAttempts > MAX_REFRESH_ATTEMPTS) {
-            String errorMsg = String.format(
-                "Exceeded maximum number of client refresh attempts (%d) within time window (%d ms). " +
-                "This may indicate a persistent credential issue.",
-                MAX_REFRESH_ATTEMPTS, REFRESH_WINDOW_MS);
+            String errorMsg =
+                    String.format(
+                            "Exceeded maximum number of client refresh attempts (%d) within time window (%d ms). "
+                                    + "This may indicate a persistent credential issue.",
+                            MAX_REFRESH_ATTEMPTS, REFRESH_WINDOW_MS);
             LOG.error(errorMsg);
             throw new RuntimeException(errorMsg);
         }
 
         try {
-            LOG.info("Closing existing DynamoDB Streams client due to expired credentials (attempt {} of {} within window)",
-                    refreshAttempts, MAX_REFRESH_ATTEMPTS);
+            LOG.info(
+                    "Closing existing DynamoDB Streams client due to expired credentials (attempt {} of {} within window)",
+                    refreshAttempts,
+                    MAX_REFRESH_ATTEMPTS);
             dynamoDbStreamsClient.close();
         } catch (Exception e) {
             LOG.warn("Error closing DynamoDB Streams client", e);
