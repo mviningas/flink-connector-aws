@@ -235,8 +235,7 @@ public class DynamoDbStreamsProxy implements StreamProxy {
 
         return "ExpiredToken".equalsIgnoreCase(errorCode)
                 || "UnrecognizedClientException".equalsIgnoreCase(errorCode)
-                || (e.getMessage() != null
-                        && e.getMessage().contains("security token included in the request is expired"));
+                || (e.getMessage() != null && e.getMessage().contains("security token included in the request is expired"));
     }
 
     @Override
