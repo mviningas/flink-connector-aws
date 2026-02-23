@@ -27,6 +27,10 @@ import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.services.dynamodb.model.DescribeStreamRequest;
 import software.amazon.awssdk.services.dynamodb.model.DescribeStreamResponse;
+import software.amazon.awssdk.services.dynamodb.model.DynamoDbException;
+import software.amazon.awssdk.core.exception.SdkServiceException;
+import software.amazon.awssdk.awscore.exception.AwsServiceException;
+import software.amazon.awssdk.awscore.exception.AwsErrorDetails;
 import software.amazon.awssdk.services.dynamodb.model.ExpiredIteratorException;
 import software.amazon.awssdk.services.dynamodb.model.GetRecordsRequest;
 import software.amazon.awssdk.services.dynamodb.model.GetRecordsResponse;
@@ -49,7 +53,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Internal
 public class DynamoDbStreamsProxy implements StreamProxy {
 
-    private final DynamoDbStreamsClient dynamoDbStreamsClient;
+    private DynamoDbStreamsClient dynamoDbStreamsClient;
     private final SdkHttpClient httpClient;
     private final Map<String, String> shardIdToIteratorStore;
     private static final GetRecordsResponse EMPTY_GET_RECORDS_RESPONSE =
@@ -59,6 +63,12 @@ public class DynamoDbStreamsProxy implements StreamProxy {
                     .build();
 
     private static final Logger LOG = LoggerFactory.getLogger(DynamoDbStreamsProxy.class);
+    
+    // Circuit breaker parameters to prevent infinite client refreshes
+    private static final int MAX_REFRESH_ATTEMPTS = 3;
+    private static final long REFRESH_WINDOW_MS = 60000; // 1 minute
+    private int refreshAttempts = 0;
+    private long firstRefreshTimestamp = 0;
 
     public DynamoDbStreamsProxy(
             DynamoDbStreamsClient dynamoDbStreamsClient, SdkHttpClient httpClient) {
@@ -69,24 +79,33 @@ public class DynamoDbStreamsProxy implements StreamProxy {
 
     @Override
     public ListShardsResult listShards(String streamArn, @Nullable String lastSeenShardId) {
-        ListShardsResult listShardsResult = new ListShardsResult();
+        try {
+            ListShardsResult listShardsResult = new ListShardsResult();
 
-        String lastEvaluatedShardId = lastSeenShardId;
-        DescribeStreamResponse describeStreamResponse;
-        do {
-            describeStreamResponse = this.describeStream(streamArn, lastEvaluatedShardId);
-            listShardsResult.addShards(describeStreamResponse.streamDescription().shards());
-            listShardsResult.setStreamStatus(
-                    describeStreamResponse.streamDescription().streamStatus());
-            lastEvaluatedShardId =
-                    describeStreamResponse.streamDescription().lastEvaluatedShardId();
-            LOG.debug(
-                    "DescribeStream lastEvaluatedShardId: {}, returned shards: {}",
-                    lastEvaluatedShardId,
-                    describeStreamResponse.streamDescription().shards());
-        } while (describeStreamResponse.streamDescription().lastEvaluatedShardId() != null);
+            String lastEvaluatedShardId = lastSeenShardId;
+            DescribeStreamResponse describeStreamResponse;
+            do {
+                describeStreamResponse = this.describeStream(streamArn, lastEvaluatedShardId);
+                listShardsResult.addShards(describeStreamResponse.streamDescription().shards());
+                listShardsResult.setStreamStatus(
+                        describeStreamResponse.streamDescription().streamStatus());
+                lastEvaluatedShardId =
+                        describeStreamResponse.streamDescription().lastEvaluatedShardId();
+                LOG.debug(
+                        "DescribeStream lastEvaluatedShardId: {}, returned shards: {}",
+                        lastEvaluatedShardId,
+                        describeStreamResponse.streamDescription().shards());
+            } while (describeStreamResponse.streamDescription().lastEvaluatedShardId() != null);
 
-        return listShardsResult;
+            return listShardsResult;
+        } catch (DynamoDbException e) {
+            if (isExpiredTokenException(e)) {
+                LOG.info("Detected expired or invalid token. Refreshing client.");
+                refreshClient();
+                return listShards(streamArn, lastSeenShardId);
+            }
+            throw e;
+        }
     }
 
     @Override
@@ -100,6 +119,13 @@ public class DynamoDbStreamsProxy implements StreamProxy {
             listShardsResult.addShards(describeStreamResponse.streamDescription().shards());
             listShardsResult.setStreamStatus(
                     describeStreamResponse.streamDescription().streamStatus());
+        } catch (DynamoDbException e) {
+            if (isExpiredTokenException(e)) {
+                LOG.info("Detected expired or invalid token. Refreshing client.");
+                refreshClient();
+                return listShardsWithFilter(streamArn, shardFilter);
+            }
+            LOG.warn("DescribeStream with Filter API threw an exception", e);
         } catch (Exception e) {
             LOG.warn("DescribeStream with Filter API threw an exception", e);
         }
@@ -156,7 +182,62 @@ public class DynamoDbStreamsProxy implements StreamProxy {
                             + "This might indicate that there is restore happening from stale snapshot or data loss from backpressure",
                     shardId);
             return EMPTY_GET_RECORDS_RESPONSE;
+        } catch (DynamoDbException e) {
+            if (isExpiredTokenException(e)) {
+                LOG.info("Detected expired or invalid token. Refreshing client.");
+                refreshClient();
+                return getRecords(streamArn, shardId, startingPosition);
+            }
+            throw e;
         }
+    }
+
+    private synchronized void refreshClient() {
+        // Implement circuit breaker pattern to prevent infinite refresh loops
+        long currentTime = System.currentTimeMillis();
+        
+        // If this is the first refresh attempt or we're outside the window, reset the counter
+        if (firstRefreshTimestamp == 0 || currentTime - firstRefreshTimestamp > REFRESH_WINDOW_MS) {
+            refreshAttempts = 0;
+            firstRefreshTimestamp = currentTime;
+        }
+        
+        // Increment the counter
+        refreshAttempts++;
+        
+        // Check if we've exceeded the maximum number of attempts
+        if (refreshAttempts > MAX_REFRESH_ATTEMPTS) {
+            String errorMsg = String.format(
+                "Exceeded maximum number of client refresh attempts (%d) within time window (%d ms). " +
+                "This may indicate a persistent credential issue.",
+                MAX_REFRESH_ATTEMPTS, REFRESH_WINDOW_MS);
+            LOG.error(errorMsg);
+            throw new RuntimeException(errorMsg);
+        }
+        
+        try {
+            LOG.info("Closing existing DynamoDB Streams client due to expired credentials (attempt {} of {} within window)",
+                    refreshAttempts, MAX_REFRESH_ATTEMPTS);
+            dynamoDbStreamsClient.close();
+        } catch (Exception e) {
+            LOG.warn("Error closing DynamoDB Streams client", e);
+        }
+        
+        try {
+            dynamoDbStreamsClient = DynamoDbStreamsClient.create();
+            LOG.info("Created new DynamoDB Streams client with fresh credentials");
+        } catch (Exception e) {
+            LOG.error("Failed to create new DynamoDB Streams client. This may indicate a non-temporary credential issue.", e);
+            throw new RuntimeException("Failed to refresh DynamoDB Streams client due to credential issues", e);
+        }
+    }
+    
+    private boolean isExpiredTokenException(AwsServiceException e) {
+        String errorCode = e.awsErrorDetails() != null ? e.awsErrorDetails().errorCode() : "";
+        
+        return "ExpiredToken".equalsIgnoreCase(errorCode) ||
+               "UnrecognizedClientException".equalsIgnoreCase(errorCode) ||
+               (e.getMessage() != null && e.getMessage().contains("security token included in the request is expired"));
     }
 
     @Override
@@ -166,51 +247,69 @@ public class DynamoDbStreamsProxy implements StreamProxy {
     }
 
     private DescribeStreamResponse describeStream(String streamArn, @Nullable String startShardId) {
-        final DescribeStreamRequest describeStreamRequest =
-                DescribeStreamRequest.builder()
-                        .streamArn(streamArn)
-                        .exclusiveStartShardId(startShardId)
-                        .build();
+        try {
+            final DescribeStreamRequest describeStreamRequest =
+                    DescribeStreamRequest.builder()
+                            .streamArn(streamArn)
+                            .exclusiveStartShardId(startShardId)
+                            .build();
 
-        DescribeStreamResponse describeStreamResponse =
-                dynamoDbStreamsClient.describeStream(describeStreamRequest);
+            DescribeStreamResponse describeStreamResponse =
+                    dynamoDbStreamsClient.describeStream(describeStreamRequest);
 
-        StreamStatus streamStatus = describeStreamResponse.streamDescription().streamStatus();
-        if (streamStatus.equals(StreamStatus.ENABLING)) {
-            if (LOG.isWarnEnabled()) {
-                LOG.warn(
-                        String.format(
-                                "The status of stream %s is %s ; result of the current "
-                                        + "describeStream operation will not contain any shard information.",
-                                streamArn, streamStatus));
+            StreamStatus streamStatus = describeStreamResponse.streamDescription().streamStatus();
+            if (streamStatus.equals(StreamStatus.ENABLING)) {
+                if (LOG.isWarnEnabled()) {
+                    LOG.warn(
+                            String.format(
+                                    "The status of stream %s is %s ; result of the current "
+                                            + "describeStream operation will not contain any shard information.",
+                                    streamArn, streamStatus));
+                }
             }
-        }
 
-        return describeStreamResponse;
+            return describeStreamResponse;
+        } catch (DynamoDbException e) {
+            if (isExpiredTokenException(e)) {
+                LOG.info("Detected expired or invalid token. Refreshing client.");
+                refreshClient();
+                return describeStream(streamArn, startShardId);
+            }
+            throw e;
+        }
     }
 
     private DescribeStreamResponse describeStream(String streamArn, ShardFilter shardFilter) {
-        final DescribeStreamRequest describeStreamRequest =
-                DescribeStreamRequest.builder()
-                        .streamArn(streamArn)
-                        .shardFilter(shardFilter)
-                        .build();
+        try {
+            final DescribeStreamRequest describeStreamRequest =
+                    DescribeStreamRequest.builder()
+                            .streamArn(streamArn)
+                            .shardFilter(shardFilter)
+                            .build();
 
-        DescribeStreamResponse describeStreamResponse =
-                dynamoDbStreamsClient.describeStream(describeStreamRequest);
+            DescribeStreamResponse describeStreamResponse =
+                    dynamoDbStreamsClient.describeStream(describeStreamRequest);
 
-        StreamStatus streamStatus = describeStreamResponse.streamDescription().streamStatus();
-        if (streamStatus.equals(StreamStatus.ENABLING)) {
-            if (LOG.isWarnEnabled()) {
-                LOG.warn(
-                        String.format(
-                                "The status of stream %s is %s ; result of the current "
-                                        + "describeStream operation will not contain any shard information.",
-                                streamArn, streamStatus));
+            StreamStatus streamStatus = describeStreamResponse.streamDescription().streamStatus();
+            if (streamStatus.equals(StreamStatus.ENABLING)) {
+                if (LOG.isWarnEnabled()) {
+                    LOG.warn(
+                            String.format(
+                                    "The status of stream %s is %s ; result of the current "
+                                            + "describeStream operation will not contain any shard information.",
+                                    streamArn, streamStatus));
+                }
             }
-        }
 
-        return describeStreamResponse;
+            return describeStreamResponse;
+        } catch (DynamoDbException e) {
+            if (isExpiredTokenException(e)) {
+                LOG.info("Detected expired or invalid token. Refreshing client.");
+                refreshClient();
+                return describeStream(streamArn, shardFilter);
+            }
+            throw e;
+        }
     }
 
     private String getShardIterator(
@@ -255,6 +354,13 @@ public class DynamoDbStreamsProxy implements StreamProxy {
                     shardId,
                     streamArn);
             return null;
+        } catch (DynamoDbException e) {
+            if (isExpiredTokenException(e)) {
+                LOG.info("Detected expired or invalid token. Refreshing client.");
+                refreshClient();
+                return getShardIterator(streamArn, shardId, startingPosition);
+            }
+            throw e;
         }
     }
 
@@ -262,7 +368,16 @@ public class DynamoDbStreamsProxy implements StreamProxy {
         if (Objects.isNull(shardIterator)) {
             return EMPTY_GET_RECORDS_RESPONSE;
         }
-        return dynamoDbStreamsClient.getRecords(
-                GetRecordsRequest.builder().shardIterator(shardIterator).build());
+        try {
+            return dynamoDbStreamsClient.getRecords(
+                    GetRecordsRequest.builder().shardIterator(shardIterator).build());
+        } catch (DynamoDbException e) {
+            if (isExpiredTokenException(e)) {
+                LOG.info("Detected expired or invalid token. Refreshing client.");
+                refreshClient();
+                return getRecords(shardIterator);
+            }
+            throw e;
+        }
     }
 }
