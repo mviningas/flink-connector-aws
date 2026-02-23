@@ -193,19 +193,16 @@ public class DynamoDbStreamsProxy implements StreamProxy {
     }
 
     private synchronized void refreshClient() {
-        // Implement circuit breaker pattern to prevent infinite refresh loops
         long currentTime = System.currentTimeMillis();
-        
+
         // If this is the first refresh attempt or we're outside the window, reset the counter
         if (firstRefreshTimestamp == 0 || currentTime - firstRefreshTimestamp > REFRESH_WINDOW_MS) {
             refreshAttempts = 0;
             firstRefreshTimestamp = currentTime;
         }
-        
-        // Increment the counter
+
         refreshAttempts++;
-        
-        // Check if we've exceeded the maximum number of attempts
+
         if (refreshAttempts > MAX_REFRESH_ATTEMPTS) {
             String errorMsg = String.format(
                 "Exceeded maximum number of client refresh attempts (%d) within time window (%d ms). " +
@@ -214,7 +211,7 @@ public class DynamoDbStreamsProxy implements StreamProxy {
             LOG.error(errorMsg);
             throw new RuntimeException(errorMsg);
         }
-        
+
         try {
             LOG.info("Closing existing DynamoDB Streams client due to expired credentials (attempt {} of {} within window)",
                     refreshAttempts, MAX_REFRESH_ATTEMPTS);
@@ -222,7 +219,7 @@ public class DynamoDbStreamsProxy implements StreamProxy {
         } catch (Exception e) {
             LOG.warn("Error closing DynamoDB Streams client", e);
         }
-        
+
         try {
             dynamoDbStreamsClient = DynamoDbStreamsClient.create();
             LOG.info("Created new DynamoDB Streams client with fresh credentials");
@@ -231,7 +228,7 @@ public class DynamoDbStreamsProxy implements StreamProxy {
             throw new RuntimeException("Failed to refresh DynamoDB Streams client due to credential issues", e);
         }
     }
-    
+
     private boolean isExpiredTokenException(AwsServiceException e) {
         String errorCode = e.awsErrorDetails() != null ? e.awsErrorDetails().errorCode() : "";
         
