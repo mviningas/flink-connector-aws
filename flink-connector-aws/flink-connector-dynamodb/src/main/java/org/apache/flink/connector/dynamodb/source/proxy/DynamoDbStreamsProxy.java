@@ -225,8 +225,11 @@ public class DynamoDbStreamsProxy implements StreamProxy {
             dynamoDbStreamsClient = DynamoDbStreamsClient.create();
             LOG.info("Created new DynamoDB Streams client with fresh credentials");
         } catch (Exception e) {
-            LOG.error("Failed to create new DynamoDB Streams client. This may indicate a non-temporary credential issue.", e);
-            throw new RuntimeException("Failed to refresh DynamoDB Streams client due to credential issues", e);
+            LOG.error(
+                    "Failed to create new DynamoDB Streams client. This may indicate a non-temporary credential issue.",
+                    e);
+            throw new RuntimeException(
+                    "Failed to refresh DynamoDB Streams client due to credential issues", e);
         }
     }
 
@@ -235,7 +238,9 @@ public class DynamoDbStreamsProxy implements StreamProxy {
 
         return "ExpiredToken".equalsIgnoreCase(errorCode)
                 || "UnrecognizedClientException".equalsIgnoreCase(errorCode)
-                || (e.getMessage() != null && e.getMessage().contains("security token included in the request is expired"));
+                || (e.getMessage() != null
+                        && e.getMessage()
+                                .contains("security token included in the request is expired"));
     }
 
     @Override
