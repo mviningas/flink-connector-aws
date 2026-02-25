@@ -39,6 +39,7 @@ import software.amazon.awssdk.services.dynamodb.model.ShardFilter;
 import software.amazon.awssdk.services.dynamodb.model.StreamStatus;
 import software.amazon.awssdk.services.dynamodb.model.TrimmedDataAccessException;
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient;
+import software.amazon.awssdk.regions.Region;
 
 import javax.annotation.Nullable;
 
@@ -194,7 +195,6 @@ public class DynamoDbStreamsProxy implements StreamProxy {
     private synchronized void refreshClient() {
         long currentTime = System.currentTimeMillis();
 
-        // If this is the first refresh attempt or we're outside the window, reset the counter
         if (firstRefreshTimestamp == 0 || currentTime - firstRefreshTimestamp > REFRESH_WINDOW_MS) {
             refreshAttempts = 0;
             firstRefreshTimestamp = currentTime;
@@ -212,6 +212,9 @@ public class DynamoDbStreamsProxy implements StreamProxy {
             throw new RuntimeException(errorMsg);
         }
 
+        final software.amazon.awssdk.regions.Region region =
+                dynamoDbStreamsClient.serviceClientConfiguration().region();
+
         try {
             LOG.info(
                     "Closing existing DynamoDB Streams client due to expired credentials (attempt {} of {} within window)",
@@ -223,13 +226,15 @@ public class DynamoDbStreamsProxy implements StreamProxy {
         }
 
         try {
-            dynamoDbStreamsClient = DynamoDbStreamsClient.builder()
-                    .credentialsProvider(DefaultCredentialsProvider.builder()
-                            .asyncCredentialUpdateEnabled(true)
-                            .build())
-                    .region(dynamoDbStreamsClient.serviceClientConfiguration().region())
-                    .httpClient(httpClient)
-                    .build();
+            dynamoDbStreamsClient =
+                    DynamoDbStreamsClient.builder()
+                            .credentialsProvider(
+                                    DefaultCredentialsProvider.builder()
+                                            .asyncCredentialUpdateEnabled(true)
+                                            .build())
+                            .region(region)
+                            .httpClient(httpClient)
+                            .build();
             LOG.info("Created new DynamoDB Streams client with fresh credentials");
         } catch (Exception e) {
             LOG.error(
