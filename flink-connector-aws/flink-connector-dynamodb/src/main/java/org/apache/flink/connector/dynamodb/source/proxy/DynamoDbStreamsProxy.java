@@ -24,6 +24,7 @@ import org.apache.flink.connector.dynamodb.source.util.ListShardsResult;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.services.dynamodb.model.DescribeStreamRequest;
@@ -222,7 +223,13 @@ public class DynamoDbStreamsProxy implements StreamProxy {
         }
 
         try {
-            dynamoDbStreamsClient = DynamoDbStreamsClient.create();
+            dynamoDbStreamsClient = DynamoDbStreamsClient.builder()
+                    .credentialsProvider(DefaultCredentialsProvider.builder()
+                            .asyncCredentialUpdateEnabled(true)
+                            .build())
+                    .region(dynamoDbStreamsClient.serviceClientConfiguration().region())
+                    .httpClient(httpClient)
+                    .build();
             LOG.info("Created new DynamoDB Streams client with fresh credentials");
         } catch (Exception e) {
             LOG.error(
