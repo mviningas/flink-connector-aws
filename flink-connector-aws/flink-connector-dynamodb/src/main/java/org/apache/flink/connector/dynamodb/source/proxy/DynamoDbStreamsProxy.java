@@ -212,8 +212,7 @@ public class DynamoDbStreamsProxy implements StreamProxy {
             throw new RuntimeException(errorMsg);
         }
 
-        final software.amazon.awssdk.regions.Region region =
-                dynamoDbStreamsClient.serviceClientConfiguration().region();
+        final Region region = dynamoDbStreamsClient.serviceClientConfiguration().region();
 
         try {
             LOG.info(
