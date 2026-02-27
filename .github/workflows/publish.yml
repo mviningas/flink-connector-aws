@@ -1,0 +1,27 @@
+name: Publish to GitHub Packages
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'adopt'
+          java-version: '11'
+          server-id: github
+          settings-path: ${{ github.workspace }}
+          
+      - name: Build and publish
+        run: mvn clean deploy -DskipTests -pl '!flink-python' -am
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

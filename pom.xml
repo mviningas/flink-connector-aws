@@ -31,7 +31,7 @@ under the License.
 
     <groupId>org.apache.flink</groupId>
     <artifactId>flink-connector-aws</artifactId>
-    <version>6.0-SNAPSHOT</version>
+    <version>5.1.0-1.20-SMARTSHEET-SNAPSHOT</version>
 
     <name>Flink : Connectors : AWS</name>
     <packaging>pom</packaging>
@@ -51,6 +51,14 @@ under the License.
         <connection>git@github.com:apache/flink-connector-aws.git</connection>
         <developerConnection>scm:git:https://gitbox.apache.org/repos/asf/flink-connector-aws.git</developerConnection>
     </scm>
+    
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages</name>
+            <url>https://maven.pkg.github.com/mviningas/flink-connector-aws</url>
+        </repository>
+    </distributionManagement>
 
     <properties>
         <aws.sdkv2.version>2.40.3</aws.sdkv2.version>
