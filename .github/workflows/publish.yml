@@ -22,6 +22,6 @@ jobs:
           settings-path: ${{ github.workspace }}
           
       - name: Build and publish
-        run: mvn deploy -DskipTests
+        run: mvn clean deploy -DskipTests -pl '!flink-python' -am
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
