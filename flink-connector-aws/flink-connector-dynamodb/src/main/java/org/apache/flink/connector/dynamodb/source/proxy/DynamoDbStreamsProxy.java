@@ -36,7 +36,6 @@ import software.amazon.awssdk.services.dynamodb.model.GetRecordsRequest;
 import software.amazon.awssdk.services.dynamodb.model.GetRecordsResponse;
 import software.amazon.awssdk.services.dynamodb.model.GetShardIteratorRequest;
 import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException;
-import software.amazon.awssdk.services.dynamodb.model.ShardFilter;
 import software.amazon.awssdk.services.dynamodb.model.StreamStatus;
 import software.amazon.awssdk.services.dynamodb.model.TrimmedDataAccessException;
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient;
@@ -224,7 +223,7 @@ public class DynamoDbStreamsProxy implements StreamProxy {
                     "Failed to refresh DynamoDB Streams client due to credential issues", e);
         }
     }
-    
+
     private boolean isExpiredTokenException(AwsServiceException e) {
         String errorCode = e.awsErrorDetails() != null ? e.awsErrorDetails().errorCode() : "";
 
@@ -330,7 +329,8 @@ public class DynamoDbStreamsProxy implements StreamProxy {
         } catch (AwsServiceException e) {
             // Handle expired security token error
             if (isExpiredTokenException(e)) {
-                LOG.info("Received expired security token error in getRecords. Refreshing DynamoDB Streams client.");
+                LOG.info(
+                    "Received expired security token error in getRecords. Refreshing DynamoDB Streams client.");
                 refreshClient();
                 // Retry the operation with the new client
                 return getRecords(shardIterator);
