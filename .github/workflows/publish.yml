@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - v5.1-token-refresh
+      - v5.1
 
 jobs:
   publish:
