@@ -330,7 +330,7 @@ public class DynamoDbStreamsProxy implements StreamProxy {
             // Handle expired security token error
             if (isExpiredTokenException(e)) {
                 LOG.info(
-                    "Received expired security token error in getRecords. Refreshing DynamoDB Streams client.");
+                        "Received expired security token error in getRecords. Refreshing DynamoDB Streams client.");
                 refreshClient();
                 // Retry the operation with the new client
                 return getRecords(shardIterator);
